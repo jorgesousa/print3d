@@ -73,6 +73,11 @@ docs/preview.jpg        Screenshot used in this README
 
 [three.js](https://threejs.org/) · [Clipper](https://www.npmjs.com/package/clipper-lib) · [fflate](https://github.com/101arrowz/fflate) · [Vite](https://vite.dev/)
 
+## More docs
+
+- [docs/DESIGN.md](docs/DESIGN.md): design decisions, rules and how to check changes
+- [.github/copilot-instructions.md](.github/copilot-instructions.md): project rules for GitHub Copilot
+
 ## Credits
 
 - Idea: **Francisco Sousa**
