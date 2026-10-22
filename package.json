@@ -1,0 +1,31 @@
+{
+  "name": "print3d",
+  "version": "1.0.0",
+  "description": "Watch a 3D print come to life: upload an STL/3MF/OBJ, slice it in the browser and see an FDM printer build it layer by layer in real-time 3D.",
+  "author": "Jorge Sousa",
+  "license": "MIT",
+  "homepage": "https://jorgesousa.github.io/print3d/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jorgesousa/print3d.git"
+  },
+  "keywords": ["3d-printing", "fdm", "slicer", "gcode", "threejs", "webgl", "education"],
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clipper-lib": "^6.4.2",
+    "fflate": "^0.8.3",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "vite": "^8.3.4"
+  }
+}

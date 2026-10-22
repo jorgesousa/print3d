@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PRINT3D — Watch a 3D print come to life</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect x=%224%22 y=%224%22 width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%2300ffa3%22/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="viewport"></div>
+
+    <header class="brand">
+      <div class="logo"><span class="logo-mark"></span>PRINT<b>3D</b></div>
+      <div class="tagline">From pixels to plastic — layer by layer</div>
+    </header>
+
+    <aside id="left" class="panel">
+      <section>
+        <h3>1 · Choose a model</h3>
+        <div id="demo-grid" class="demo-grid"></div>
+        <label id="drop" class="dropzone">
+          <input id="file" type="file" accept=".stl,.3mf,.obj" hidden />
+          <div class="drop-icon">⤓</div>
+          <div><b>Upload your model</b><br /><span>Drop an STL, 3MF or OBJ here, or click to browse</span></div>
+        </label>
+        <div id="model-info" class="model-info"></div>
+      </section>
+      <section>
+        <h3>2 · Filament</h3>
+        <div id="swatches" class="swatches"></div>
+      </section>
+      <section>
+        <h3>3 · Slicer settings</h3>
+        <div class="setting">
+          <label>Layer height <output id="lh-out">0.20 mm</output></label>
+          <div class="seg" id="lh">
+            <button data-v="0.12">Fine</button><button data-v="0.2" class="on">Standard</button><button data-v="0.28">Draft</button>
+          </div>
+        </div>
+        <div class="setting">
+          <label>Infill density <output id="infill-out">15%</output></label>
+          <input id="infill" type="range" min="5" max="50" step="5" value="15" />
+        </div>
+        <div class="setting">
+          <label>Walls <output id="walls-out">2</output></label>
+          <input id="walls" type="range" min="1" max="4" step="1" value="2" />
+        </div>
+        <div class="setting">
+          <label>Model scale <output id="scale-out">100%</output></label>
+          <input id="scale" type="range" min="40" max="160" step="10" value="100" />
+        </div>
+      </section>
+      <button id="start" class="cta"><span class="cta-glow"></span>▶&nbsp; Slice &amp; Print</button>
+    </aside>
+
+    <aside id="right" class="panel">
+      <div class="telemetry">
+        <div class="tile hot"><span>Nozzle</span><b id="t-nozzle">25°C</b><i><em id="t-nozzle-bar"></em></i></div>
+        <div class="tile cold"><span>Bed</span><b id="t-bed">25°C</b><i><em id="t-bed-bar"></em></i></div>
+        <div class="tile"><span>Layer</span><b id="t-layer">—</b></div>
+        <div class="tile"><span>Z height</span><b id="t-z">—</b></div>
+        <div class="tile"><span>Speed</span><b id="t-speed">0 mm/s</b></div>
+        <div class="tile"><span>Part fan</span><b id="t-fan">0%</b></div>
+        <div class="tile"><span>Filament</span><b id="t-fil">0.00 m</b></div>
+        <div class="tile"><span>Real time left</span><b id="t-eta">—</b></div>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="minimap-wrap">
+        <div class="minihead"><span>Current layer — top view</span><span id="mini-layer"></span></div>
+        <canvas id="minimap" width="440" height="300"></canvas>
+      </div>
+      <div class="gcode">
+        <div class="minihead"><span>G-code stream</span><span class="blink">● LIVE</span></div>
+        <pre id="gcode"></pre>
+      </div>
+    </aside>
+
+    <div id="story">
+      <div class="steps" id="steps">
+        <div data-p="slicing"><i>1</i>Slice</div>
+        <div data-p="heating"><i>2</i>Heat</div>
+        <div data-p="leveling"><i>3</i>Level</div>
+        <div data-p="printing"><i>4</i>Print</div>
+        <div data-p="cooling"><i>5</i>Cool</div>
+        <div data-p="inspect"><i>6</i>Inspect</div>
+      </div>
+      <div class="caption">
+        <div id="caption-title">Ready when you are</div>
+        <div id="caption-text">Pick a model, choose a filament colour and hit <b>Slice &amp; Print</b> to see how a 3D printer turns a digital file into a real object.</div>
+        <div class="progress"><em id="phase-progress"></em></div>
+      </div>
+    </div>
+
+    <div id="transport" class="panel">
+      <button id="play" class="icon" title="Play / pause">❚❚</button>
+      <div class="scrub">
+        <input id="scrub" type="range" min="0" max="1000" value="0" disabled />
+        <div class="scrub-labels"><span id="scrub-l">0%</span><span id="playback-info">—</span></div>
+      </div>
+      <select id="speed" title="Playback speed">
+        <option value="auto" selected>Auto speed</option>
+        <option value="1">1× real time</option>
+        <option value="5">5×</option>
+        <option value="20">20×</option>
+        <option value="60">60×</option>
+        <option value="200">200×</option>
+      </select>
+      <div class="seg cams" id="cams">
+        <button data-c="cinematic" class="on">Cinematic</button><button data-c="nozzle">Nozzle cam</button><button data-c="orbit">Free</button>
+      </div>
+      <div class="toggles">
+        <label><input id="feat" type="checkbox" /> Feature colours</label>
+        <label><input id="ghost" type="checkbox" checked /> Ghost</label>
+        <label><input id="sound" type="checkbox" /> Sound</label>
+        <button id="explain-btn" class="link">How a hotend works</button>
+      </div>
+    </div>
+
+    <div id="inspect" class="panel">
+      <div class="insp-row">
+        <div class="seg" id="i-grav" title="Physics"><button data-g="0" class="on">Float</button><button data-g="1">Gravity</button></div>
+        <div class="insp-ctl cut">
+          <span>Cut</span>
+          <div class="seg mini" id="i-cut"><button data-a="off" class="on">Off</button><button data-a="x">X</button><button data-a="y">Y</button><button data-a="z">Z</button></div>
+          <input id="i-cutpos" type="range" min="0" max="1000" value="500" disabled />
+        </div>
+        <label class="insp-ctl"><span>Explode</span><input id="i-explode" type="range" min="0" max="1000" value="0" /></label>
+        <label class="insp-ctl"><span>Layers <b id="i-layer-out"></b></span><input id="i-layers" type="range" min="1" max="100" value="100" /></label>
+      </div>
+      <div class="insp-row">
+        <div class="toggles">
+          <label><input id="i-feat" type="checkbox" /> Feature colours</label>
+          <label><input id="i-walls" type="checkbox" /> Hide walls</label>
+          <label class="artic-only"><input id="i-joints" type="checkbox" /> Show joints</label>
+        </div>
+        <button id="i-flex" class="ghost-btn artic-only">〰 Flex</button>
+        <span class="insp-hint" id="i-hint"></span>
+        <button id="i-reset" class="ghost-btn">⟲ Reset</button>
+        <button id="i-back" class="ghost-btn">Put it back</button>
+      </div>
+    </div>
+
+    <div id="hotend" class="panel hidden">
+      <button class="close" id="hotend-close">×</button>
+      <h4>Inside the hotend</h4>
+      <svg viewBox="0 0 300 345" class="hotend-svg">
+        <defs>
+          <linearGradient id="melt" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--fil)" />
+            <stop offset="1" stop-color="#ffb347" />
+          </linearGradient>
+          <filter id="glow"><feGaussianBlur stdDeviation="4" /></filter>
+        </defs>
+        <rect x="122" y="0" width="16" height="240" fill="var(--fil)" class="fil" />
+        <line x1="130" y1="0" x2="130" y2="240" class="fil-flow" />
+        <g class="gear gear-l"><circle cx="100" cy="60" r="20" /><path d="M100 36v-6M100 84v6M76 60h-6M124 60h6M83 43l-4-4M117 77l4 4M83 77l-4 4M117 43l4-4" /></g>
+        <g class="gear gear-r"><circle cx="160" cy="60" r="20" /><path d="M160 36v-6M160 84v6M136 60h-6M184 60h6M143 43l-4-4M177 77l4 4M143 77l-4 4M177 43l4-4" /></g>
+        <g class="sink"><rect x="92" y="100" width="76" height="8" /><rect x="92" y="114" width="76" height="8" /><rect x="92" y="128" width="76" height="8" /><rect x="92" y="142" width="76" height="8" /></g>
+        <rect x="118" y="156" width="24" height="22" class="heatbreak" />
+        <rect x="88" y="178" width="84" height="56" rx="4" class="block" />
+        <rect x="88" y="178" width="84" height="56" rx="4" class="block-glow" filter="url(#glow)" />
+        <rect x="122" y="182" width="16" height="58" fill="url(#melt)" />
+        <path d="M112 234h36l-14 26h-8z" class="nozzle" />
+        <circle cx="130" cy="272" r="5" class="drop" />
+        <text x="196" y="64">Extruder gears</text><text x="196" y="78" class="sub">push filament</text>
+        <text x="186" y="128">Heatsink + fan</text><text x="186" y="142" class="sub">keeps it solid</text>
+        <text x="150" y="170">Heat break</text>
+        <text x="182" y="206">Heater block</text><text x="182" y="220" class="sub">220 °C melt zone</text>
+        <text x="154" y="258">0.4 mm nozzle</text>
+        <text x="8" y="300" class="sub">Solid 1.75 mm filament is squeezed into a</text>
+        <text x="8" y="316" class="sub">hot zone, melts, and is pushed out as a thin</text>
+        <text x="8" y="332" class="sub">bead that bonds to the layer below.</text>
+      </svg>
+    </div>
+
+    <div id="done" class="panel hidden">
+      <div class="done-badge">✓</div>
+      <h2>Print complete</h2>
+      <div id="done-stats" class="done-stats"></div>
+      <div class="done-actions">
+        <button id="inspect-btn" class="cta small">✋ Pick it up</button>
+        <button id="again" class="ghost-btn">↻ Print again</button>
+        <button id="another" class="ghost-btn">Choose another model</button>
+      </div>
+    </div>
+
+    <div id="toast"></div>
+    <div id="dragover"><div>Drop to load your model</div></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
