@@ -13,7 +13,10 @@ export async function loadModelFile(file) {
   else if (ext === 'obj') pos = parseOBJ(buf);
   else throw new Error(`Unsupported file type ".${ext}". Use STL, 3MF or OBJ.`);
   if (!pos || pos.length < 9) throw new Error('No printable geometry found in this file.');
-  return fixWinding(pos);
+  const colours = pos.colours;
+  pos = fixWinding(pos); // keeps the triangle order, so colours still line up
+  pos.colours = colours;
+  return pos;
 }
 
 function parseSTL(buf) {
@@ -85,11 +88,29 @@ function parse3MF(buf) {
     }
   }
 
+  const paint = readBambuColours(files, xml);
+  const colourOf = (path) => {
+    const map = {};
+    for (const tag of ['base', 'color']) {
+      const doc = docs[path];
+      if (!doc) continue;
+      for (const el of doc.getElementsByTagNameNS('*', tag)) {
+        const group = el.parentNode.getAttribute('id');
+        (map[group] ??= []).push((el.getAttribute('displaycolor') || el.getAttribute('color') || '').slice(0, 7));
+      }
+    }
+    return map;
+  };
+  const colourCache = {};
+  const triColours = []; // one '#rrggbb' or null per triangle
+
   const out = [];
-  const emit = (path, id, matrix, depth) => {
+  const emit = (path, id, matrix, depth, extruder) => {
     if (depth > 16) return;
     const obj = objectsOf(path)[id];
     if (!obj) return;
+    const ownExtruder = paint.extruders[id] ?? extruder;
+    const mats = (colourCache[path] ??= colourOf(path));
     const mesh = obj.getElementsByTagNameNS('*', 'mesh')[0];
     if (mesh && mesh.parentNode === obj) {
       const vs = mesh.getElementsByTagNameNS('*', 'vertex');
@@ -104,12 +125,16 @@ function parse3MF(buf) {
       for (let i = 0; i < ts.length; i++) {
         const a = +ts[i].getAttribute('v1'), b = +ts[i].getAttribute('v2'), c = +ts[i].getAttribute('v3');
         arr.set([v[a * 3], v[a * 3 + 1], v[a * 3 + 2], v[b * 3], v[b * 3 + 1], v[b * 3 + 2], v[c * 3], v[c * 3 + 1], v[c * 3 + 2]], i * 9);
+        const painted = paintedFilament(ts[i].getAttribute('paint_color') || ts[i].getAttribute('mmu_segmentation'));
+        const pid = ts[i].getAttribute('pid') ?? obj.getAttribute('pid');
+        const pidx = ts[i].getAttribute('p1') ?? obj.getAttribute('pindex') ?? 0;
+        triColours.push(paint.filaments[(painted || ownExtruder) - 1] ?? mats[pid]?.[pidx] ?? null);
       }
       out.push(arr);
     }
     for (const comp of obj.getElementsByTagNameNS('*', 'component')) {
       const m = matrix.clone().multiply(parseTransform(comp.getAttribute('transform')));
-      emit(pathAttr(comp) || path, comp.getAttribute('objectid'), m, depth + 1);
+      emit(pathAttr(comp) || path, comp.getAttribute('objectid'), m, depth + 1, ownExtruder);
     }
   };
 
@@ -117,7 +142,63 @@ function parse3MF(buf) {
   let used = items.filter((it) => it.getAttribute('printable') !== '0' && (!allowed || allowed.has(it.getAttribute('objectid'))));
   if (!used.length) used = items;
   for (const it of used) emit(pathAttr(it) || rootPath, it.getAttribute('objectid'), parseTransform(it.getAttribute('transform')), 0);
-  return mergePositions(out);
+  const pos = mergePositions(out);
+  pos.colours = buildPalette(triColours);
+  return pos;
+}
+
+// Bambu Studio / OrcaSlicer keep the filament list and each object's filament in their own config files.
+function readBambuColours(files, xml) {
+  const extruders = {};
+  let filaments = [];
+  const project = files['Metadata/project_settings.config'];
+  if (project) {
+    try { filaments = JSON.parse(strFromU8(project)).filament_colour ?? []; } catch { /* not JSON: no filament list */ }
+  }
+  const settings = files['Metadata/model_settings.config'];
+  if (settings) {
+    const doc = xml.parseFromString(strFromU8(settings), 'application/xml');
+    for (const el of [...doc.getElementsByTagName('object'), ...doc.getElementsByTagName('part')]) {
+      const md = [...el.children].find((c) => c.tagName === 'metadata' && c.getAttribute('key') === 'extruder');
+      if (md) extruders[el.getAttribute('id')] = +md.getAttribute('value');
+    }
+  }
+  return { extruders, filaments: filaments.map((c) => c.slice(0, 7)) };
+}
+
+// Painted triangles store a hex tree of subdivisions, read from the end. Each triangle here
+// takes the filament used by most of its leaves. Returns 0 when it is not painted.
+function paintedFilament(code) {
+  if (!code) return 0;
+  const count = {};
+  for (let i = code.length - 1; i >= 0; i--) {
+    const n = parseInt(code[i], 16);
+    if (n & 3) continue; // a split node, its children follow
+    let state = n >> 2;
+    if (state === 3) state = parseInt(code[--i] ?? '0', 16) + 3;
+    count[state] = (count[state] || 0) + 1;
+  }
+  const painted = Object.keys(count).filter((s) => s !== '0').sort((a, b) => count[b] - count[a]);
+  return painted.length && count[painted[0]] >= (count[0] || 0) ? +painted[0] : 0;
+}
+
+// An AMS has four slots: keep the four most used colours and send the others to the closest one.
+function buildPalette(triColours) {
+  const uses = new Map();
+  for (const c of triColours) if (c) uses.set(c, (uses.get(c) || 0) + 1);
+  const palette = [...uses.keys()].sort((a, b) => uses.get(b) - uses.get(a)).slice(0, 4);
+  if (palette.length < 2) return null;
+  const rgb = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const nearest = new Map();
+  const slotOf = (c) => {
+    if (!nearest.has(c)) {
+      const a = rgb(c);
+      const dist = (p) => rgb(p).reduce((s, v, i) => s + (v - a[i]) ** 2, 0);
+      nearest.set(c, palette.reduce((best, p, i) => (dist(p) < dist(palette[best]) ? i : best), 0));
+    }
+    return nearest.get(c);
+  };
+  return { palette, merged: uses.size - palette.length, tri: Uint8Array.from(triColours, (c) => (c ? slotOf(c) : 0)) };
 }
 
 function parseTransform(str) {

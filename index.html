@@ -31,6 +31,10 @@
       </section>
       <section>
         <h3>2 · Filament</h3>
+        <div class="seg" id="colour-mode">
+          <button data-m="single" class="on">One colour</button><button data-m="stripes">Stripes</button><button data-m="sides">Two sides</button><button data-m="file" class="hidden">From file</button>
+        </div>
+        <div id="ams-slots" class="ams-slots hidden"></div>
         <div id="swatches" class="swatches"></div>
       </section>
       <section>
@@ -67,6 +71,10 @@
         <div class="tile"><span>Part fan</span><b id="t-fan">0%</b></div>
         <div class="tile"><span>Filament</span><b id="t-fil">0.00 m</b></div>
         <div class="tile"><span>Real time left</span><b id="t-eta">—</b></div>
+      </div>
+      <div id="ams-status" class="ams-status hidden">
+        <div class="minihead"><span>AMS — loaded filament</span><span id="ams-swaps"></span></div>
+        <div id="ams-live" class="ams-slots"></div>
       </div>
       <div class="legend" id="legend"></div>
       <div class="minimap-wrap">

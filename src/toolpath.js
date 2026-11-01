@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SWAP_TIME } from './ams.js';
 
 export const FEATURES = [
   { name: 'Skirt', color: '#9aa4b2', speed: 50, tip: 'The skirt primes the nozzle so plastic flows smoothly before the real part starts.' },
@@ -22,12 +23,17 @@ export function buildToolpath(result, settings) {
     nPts += n; nSegs += n - 1; nMoves += n;
   }
   nMoves += layers.length;
+  let slot = layers[0]?.paths[0]?.slot ?? 0, swaps = 0;
+  for (const l of layers) for (const p of l.paths) if ((p.slot ?? 0) !== slot) { slot = p.slot; swaps++; }
+  nMoves += swaps;
+  slot = layers[0]?.paths[0]?.slot ?? 0;
 
   const position = new Float32Array(nPts * 4 * 3);
   const normal = new Float32Array(nPts * 4 * 3);
   const aDist = new Float32Array(nPts * 4);
   const aType = new Float32Array(nPts * 4);
   const aLayer = new Float32Array(nPts * 4);
+  const aSlot = new Float32Array(nPts * 4);
   const index = new Uint32Array(nSegs * 24);
   const segPart = new Int16Array(nSegs); // shell id per segment (-1 = skirt)
   const segLen = new Float32Array(nSegs);
@@ -36,17 +42,18 @@ export function buildToolpath(result, settings) {
     x0: new Float32Array(nMoves), y0: new Float32Array(nMoves), x1: new Float32Array(nMoves), y1: new Float32Array(nMoves),
     z: new Float32Array(nMoves), type: new Int8Array(nMoves), layer: new Int32Array(nMoves),
     t0: new Float64Array(nMoves), dur: new Float32Array(nMoves), geo: new Int32Array(nMoves), d0: new Float64Array(nMoves),
+    slot: new Int8Array(nMoves), swap: new Int32Array(nMoves), // swap: 1-based swap number, 0 = normal move
     count: 0,
   };
   const layerStartMove = new Int32Array(layers.length);
   const layerStartTime = new Float64Array(layers.length + 1);
 
   let v = 0, ii = 0, seg = 0, time = 0, dist = 0;
-  let cx = 0, cy = -110;
+  let cx = 0, cy = -110, swapNo = 0;
   const addMove = (x0, y0, x1, y1, z, type, layer, dur, geo) => {
     const m = mv.count++;
     mv.x0[m] = x0; mv.y0[m] = y0; mv.x1[m] = x1; mv.y1[m] = y1; mv.z[m] = z;
-    mv.type[m] = type; mv.layer[m] = layer; mv.t0[m] = time; mv.dur[m] = dur; mv.geo[m] = geo; mv.d0[m] = dist;
+    mv.type[m] = type; mv.layer[m] = layer; mv.t0[m] = time; mv.dur[m] = dur; mv.geo[m] = geo; mv.d0[m] = dist; mv.slot[m] = slot;
     time += dur;
   };
 
@@ -59,6 +66,11 @@ export function buildToolpath(result, settings) {
     for (const p of L.paths) {
       const pts = p.pts;
       const n = pts.length / 2;
+      if ((p.slot ?? 0) !== slot) {
+        slot = p.slot;
+        mv.swap[mv.count] = ++swapNo;
+        addMove(cx, cy, cx, cy, z, -1, li, SWAP_TIME, -1);
+      }
       // travel (includes the layer change on the first path)
       const tl = Math.hypot(pts[0] - cx, pts[1] - cy);
       if (tl > 0.01 || mv.count === layerStartMove[li]) {
@@ -89,7 +101,7 @@ export function buildToolpath(result, settings) {
         for (const r of ring) {
           position[v * 3] = r[0]; position[v * 3 + 1] = r[1]; position[v * 3 + 2] = r[2];
           normal[v * 3] = r[3]; normal[v * 3 + 1] = r[4]; normal[v * 3 + 2] = r[5];
-          aDist[v] = pd; aType[v] = p.type; aLayer[v] = li;
+          aDist[v] = pd; aType[v] = p.type; aLayer[v] = li; aSlot[v] = slot;
           v++;
         }
       }
@@ -120,6 +132,7 @@ export function buildToolpath(result, settings) {
   geometry.setAttribute('aDist', new THREE.BufferAttribute(aDist, 1));
   geometry.setAttribute('aType', new THREE.BufferAttribute(aType, 1));
   geometry.setAttribute('aLayer', new THREE.BufferAttribute(aLayer, 1));
+  geometry.setAttribute('aSlot', new THREE.BufferAttribute(aSlot, 1));
   geometry.setIndex(new THREE.BufferAttribute(index, 1));
   geometry.setDrawRange(0, 0);
   geometry.computeBoundingSphere();
@@ -127,7 +140,7 @@ export function buildToolpath(result, settings) {
   const filamentArea = Math.PI * 0.875 * 0.875;
   return {
     geometry, segPart, segLen, moves: mv, layers, layerStartMove, layerStartTime,
-    totalTime: time, totalExtrude: dist, segments: seg,
+    totalTime: time, totalExtrude: dist, segments: seg, swaps,
     filamentLength: (dist * w * settings.layerHeight) / filamentArea, // mm of 1.75 mm filament
   };
 }
@@ -163,17 +176,20 @@ export function createBeadMaterial() {
     uColorMode: { value: 0 },
     uCut: { value: 0 },
     uFeat: { value: FEATURES.map((f) => new THREE.Color(f.color)) },
+    uSlots: { value: [0, 1, 2, 3].map(() => new THREE.Color()) },
+    uSilk: { value: [0, 0, 0, 0] },
   };
   const m = new THREE.MeshStandardMaterial({ color: 0xff6b1a, roughness: 0.5, metalness: 0, side: THREE.DoubleSide });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>' + VERT_HEAD)
-      .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERT_BODY);
+      .replace('#include <common>', '#include <common>' + VERT_HEAD + 'attribute float aSlot; varying float vSlot;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERT_BODY + 'vSlot = aSlot;');
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>${FRAG_HEAD}
+        varying float vSlot; uniform vec3 uSlots[4]; uniform float uSilk[4];
         uniform float uPrinted; uniform float uHeatLen; uniform float uColorMode; uniform float uCut; uniform vec3 uFeat[6];
         vec3 featColor(float t){ int i = int(t + 0.5); vec3 c = uFeat[0];
           if(i==1) c = uFeat[1]; else if(i==2) c = uFeat[2]; else if(i==3) c = uFeat[3]; else if(i==4) c = uFeat[4]; else if(i==5) c = uFeat[5];
@@ -183,10 +199,13 @@ export function createBeadMaterial() {
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        diffuseColor.rgb = uSlots[int(vSlot + 0.5)];
         if (uColorMode > 0.5) diffuseColor.rgb = featColor(vType);
         // inside of a cut bead -> render as a solid, flat cross-section cap
         if (uCut > 0.5 && !gl_FrontFacing) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), 0.18);`,
       )
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.5, 0.25, uSilk[int(vSlot + 0.5)]);')
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = 0.55 * uSilk[int(vSlot + 0.5)];')
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nif (uCut > 0.5 && !gl_FrontFacing) normal = vec3(0.0, 0.0, 1.0);')
       .replace(
         '#include <emissivemap_fragment>',

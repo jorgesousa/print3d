@@ -19,6 +19,7 @@ It was [Francisco Sousa](https://jorgesousa.github.io/sousa-lab/)'s idea: he wan
 - **Playback controls**: play/pause, scrub through the print, speeds from 1× real time to 200×. Three cameras: Cinematic, Nozzle cam and Free. Toggles for feature colours, a ghost of the final model and sound.
 - **"How a hotend works"**: an explainer of the extruder and hotend.
 - **Inspect mode**: pop the finished part off the bed and turn it in your hands, with Float or Gravity physics. You can also cut it along X, Y or Z, explode its layers, scrub through layers and hide walls to see the infill.
+- **Multi-colour with an AMS**: load four filament slots and print Stripes or Two sides. Every filament swap is shown step by step (cut, pull back, load, purge), with the time and plastic it costs. A 3MF with colours (from materials, Bambu Studio parts or painting) loads them into the slots by itself; STL and OBJ files have no colour. There is still only one nozzle, so colours print one at a time.
 - **Print-in-place models**: articulated models (chains, hinges, screw and twist joints such as fidget toys) are split into their real parts. Their joints are measured from the geometry and simulated, so you can **Flex** the model or drop it and watch it move.
 
 ## Run it locally
@@ -57,6 +58,7 @@ src/
   inspect.js            Inspect mode: picking, cut planes, explode, rigid and multibody physics (XPBD)
   articulate.js         Print-in-place analysis: find parts, fit hinge/slider/screw joints, verify by voxels
   articulate.worker.js  Runs the articulation analysis off the main thread
+  ams.js                Multi-colour: colour patterns, splitting paths per slot, the stages of a filament swap
   sound.js              Synthesised stepper-motor "music" and fan noise (Web Audio)
   style.css             UI styles
 docs/preview.jpg        Screenshot used in this README
