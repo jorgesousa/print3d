@@ -103,7 +103,7 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
     const box = st.bbox.makeEmpty();
     const tmp = v3();
     for (let i = 0; i < T.length; i++) if (T[i] !== 0) box.expandByPoint(tmp.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]));
-    st.nLayers = tp.layers.length;
+    st.nLayers = tp.realLayers;
 
     // ---- which part does every segment belong to
     const multi = artic && artic.parts > 1;

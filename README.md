@@ -20,6 +20,7 @@ It was [Francisco Sousa](https://jorgesousa.github.io/sousa-lab/)'s idea: he wan
 - **"How a hotend works"**: an explainer of the extruder and hotend.
 - **Inspect mode**: pop the finished part off the bed and turn it in your hands, with Float or Gravity physics. You can also cut it along X, Y or Z, explode its layers, scrub through layers and hide walls to see the infill.
 - **Multi-colour with an AMS**: load four filament slots and print Stripes or Two sides. Every filament swap is shown step by step (cut, pull back, load, purge), with the time and plastic it costs. A 3MF with colours (from materials, Bambu Studio parts or painting) loads them into the slots by itself; STL and OBJ files have no colour. There is still only one nozzle, so colours print one at a time.
+- **Copies**: print up to nine copies in one job, arranged on the bed. Print sequence works like Bambu Studio: By layer shares swaps between copies, and By object finishes one copy at a time.
 - **Print-in-place models**: articulated models (chains, hinges, screw and twist joints such as fidget toys) are split into their real parts. Their joints are measured from the geometry and simulated, so you can **Flex** the model or drop it and watch it move.
 
 ## Run it locally

@@ -75,6 +75,10 @@ These models drove the design. They are not in the repo, so download them from M
 - Painted triangles are simplified: a subdivided triangle takes its dominant filament, so very fine painting looks coarser. More than 4 colours are merged into the closest slot.
 - Not modelled yet: the prime tower.
 
+## Copies
+
+`layoutCopies()` in `main.js` repeats the mesh in a grid before slicing, so each copy is a normal shell for both workers. The count drops when the bed is full. By object (`sequenceByObject()`) turns each copy's layers into a run of their own, with `realLayer` keeping the true number for the HUD and shaders. It uses wider gaps, and warns above about 36 mm; both clearances are approximate. In Inspect the copies ride along rigidly as one body, and only the heaviest linked set of parts gets joints.
+
 ## Checking changes
 
 There is no automated test suite yet. Before you push, check by hand with `npm run dev`:

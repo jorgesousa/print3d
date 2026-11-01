@@ -15,9 +15,13 @@ export const SWAP_STAGES = [
 
 const PATTERNS = {
   // whole layers change colour: few swaps
-  stripes: { slots: 4, at: (x, y, L, maxZ) => Math.floor((L.z / maxZ) * 7.999) % 4 },
+  stripes: { slots: 4, at: (x, y, L, r) => Math.floor((L.z / r.maxZ) * 7.999) % 4 },
   // two colours in the same layer: at least one swap on every layer
-  sides: { slots: 2, at: (x) => (x < 0 ? 0 : 1) },
+  // with copies on the bed, each copy gets its own two sides
+  sides: { slots: 2, at: (x, y, L, { pitch = 1e6, cols = 1 }) => {
+    const offset = cols % 2 ? 0 : pitch / 2;
+    return x < Math.round((x - offset) / pitch) * pitch + offset ? 0 : 1;
+  } },
 };
 
 // Tags every path with a slot, cutting paths where the colour changes. Each layer starts with
@@ -32,7 +36,7 @@ export function assignSlots(result, pattern) {
     for (const p of L.paths) {
       if (p.type === 0) skirt.push(p);
       else if (freeInfill && p.type === 3) free.push(p);
-      else for (const piece of splitBySlot(p, (x, y) => at(x, y, L, result.maxZ))) bySlot[piece.slot].push(piece);
+      else for (const piece of splitBySlot(p, (x, y) => at(x, y, L, result))) bySlot[piece.slot].push(piece);
     }
     const order = bySlot.map((_, i) => i).filter((i) => bySlot[i].length);
     if (order.includes(loaded)) order.sort((a, b) => (b === loaded) - (a === loaded));
