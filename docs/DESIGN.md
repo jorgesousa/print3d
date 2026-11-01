@@ -77,7 +77,7 @@ These models drove the design. They are not in the repo, so download them from M
 
 ## Copies
 
-`layoutCopies()` in `main.js` repeats the mesh in a grid before slicing, so each copy is a normal shell for both workers. The count drops when the bed is full. By object (`sequenceByObject()`) turns each copy's layers into a run of their own, with `realLayer` keeping the true number for the HUD and shaders. It uses wider gaps, and warns above about 36 mm; both clearances are approximate. In Inspect the copies ride along rigidly as one body, and only the heaviest linked set of parts gets joints.
+`layoutCopies()` in `main.js` repeats the mesh in a grid before slicing, so each copy is a normal shell for both workers. The count drops when the bed is full. By object (`sequenceByObject()`) turns each copy's layers into a run of their own, with `realLayer` keeping the true number for the HUD and shaders. It uses wider gaps, and warns above about 36 mm; both clearances are approximate. In Inspect you click one copy: only its segments become bodies (joints included), and the skirt and other copies stay on the bed.
 
 ## Checking changes
 

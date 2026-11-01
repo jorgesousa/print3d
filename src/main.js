@@ -273,16 +273,41 @@ $('start').onclick = () => (app.phase === 'idle' ? startSlicing() : resetToIdle(
 $('again').onclick = () => { resetToIdle(); startSlicing(); };
 $('another').onclick = () => resetToIdle();
 $('inspect-btn').onclick = () => startInspect();
-function startInspect() {
+// Like a real plate: choose one copy and only that one comes off the bed.
+$('viewport').addEventListener('click', (e) => {
+  if (!app.picking) return;
+  const m = app.model, p = new THREE.Vector3();
+  let best = 0, bestD = Infinity;
+  for (let c = 0; c < m.copies; c++) {
+    const x = ((c % m.cols) - (m.cols - 1) / 2) * m.pitch, y = (Math.floor(c / m.cols) - (m.rows - 1) / 2) * m.pitchY;
+    printer.printSpace.localToWorld(p.set(x, y, m.size[2] / 2)).project(S.camera);
+    const d = Math.hypot((p.x + 1) / 2 * innerWidth - e.clientX, (1 - p.y) / 2 * innerHeight - e.clientY);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  app.picking = false;
+  startInspect(best);
+});
+
+function startInspect(copy = app.pendingCopy) {
   if (!app.tp || !beadMesh || app.phase !== 'done') return;
+  const m = app.model;
+  if (m.copies > 1 && copy == null) {
+    app.picking = true;
+    $('done').classList.add('hidden');
+    setCaption('Pick a copy', '<b>Click the copy you want</b> to take it off the bed. The others stay where they are.');
+    return;
+  }
+  app.pendingCopy = copy;
   if (!app.model.artic) { app.inspectPending = true; updateInspectBtn(); return; }
   app.inspectPending = false;
+  app.pendingCopy = null;
   $('done').classList.add('hidden');
   enterPhase('inspect');
   setCam('cinematic');
   const tp = app.tp;
   inspector.start(beadMesh, tp, {
-    grams: (tp.filamentLength * 2.405 * 1.24) / 1000,
+    grams: (tp.filamentLength * 2.405 * 1.24) / 1000 / m.copies,
+    copy, copyAt: m.copies > 1 ? (x, y) => copyAt(m, x, y) : null,
     walls: settings.walls, infill: settings.infillDensity, layerHeight: settings.layerHeight, lineWidth: settings.lineWidth,
   }, app.model.artic);
 }
@@ -424,18 +449,19 @@ function layoutCopies(m, pos, size) {
   $('copies-out').textContent = count < settings.copies ? `${count} (bed full)` : count;
 }
 
+function copyAt(m, x, y) {
+  const clamp = THREE.MathUtils.clamp;
+  const col = clamp(Math.round(x / m.pitch + (m.cols - 1) / 2), 0, m.cols - 1);
+  const row = clamp(Math.round(y / m.pitchY + (m.rows - 1) / 2), 0, m.rows - 1);
+  return Math.min(row * m.cols + col, m.copies - 1);
+}
+
 // By object: finish one copy, then the next. Each copy's layers become a run of their own.
 function sequenceByObject(result, m) {
-  const clamp = THREE.MathUtils.clamp;
-  const copyOf = (p) => {
-    const col = clamp(Math.round(p.pts[0] / m.pitch + (m.cols - 1) / 2), 0, m.cols - 1);
-    const row = clamp(Math.round(p.pts[1] / m.pitchY + (m.rows - 1) / 2), 0, m.rows - 1);
-    return Math.min(row * m.cols + col, m.copies - 1);
-  };
   const out = [];
   for (let c = 0; c < m.copies; c++) {
     result.layers.forEach((L, li) => {
-      const paths = L.paths.filter((p) => (p.type === 0 ? c === 0 : copyOf(p) === c));
+      const paths = L.paths.filter((p) => (p.type === 0 ? c === 0 : copyAt(m, p.pts[0], p.pts[1]) === c));
       if (paths.length) out.push({ ...L, paths, realLayer: li, contours: c ? [] : L.contours });
     });
   }
@@ -489,6 +515,8 @@ function resetToIdle() {
   if (app.worker) { app.worker.terminate(); app.worker = null; }
   if (app.articWorker) { app.articWorker.terminate(); app.articWorker = null; }
   app.inspectPending = false;
+  app.picking = false;
+  app.pendingCopy = null;
   updateInspectBtn();
   inspector.reset();
   if (beadMesh) { beadMesh.geometry.dispose(); beadMesh.removeFromParent(); beadMesh = null; }
