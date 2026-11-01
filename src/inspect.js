@@ -43,7 +43,7 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
   depthMaterial.clippingPlanes = [cutPlane];
 
   const skirtMaterial = createBeadMaterial();
-  skirtMaterial.userData.uniforms.uMask.value = 1;
+  skirtMaterial.userData.uniforms.uMask.value = 63;
   skirtMaterial.userData.uniforms.uPrinted.value = 1e12;
 
   const pad = new THREE.Group();
@@ -102,8 +102,11 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
 
     const box = st.bbox.makeEmpty();
     const tmp = v3();
-    for (let i = 0; i < T.length; i++) if (T[i] !== 0) box.expandByPoint(tmp.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]));
-    st.nLayers = tp.layers.length;
+    // with copies on the bed only the chosen one comes off; the others stay behind
+    const { copy, copyAt } = st.info;
+    const inCopy = (x, y) => !copyAt || copyAt(x, y) === copy;
+    for (let i = 0; i < T.length; i++) if (T[i] !== 0 && inCopy(P[i * 3], P[i * 3 + 1])) box.expandByPoint(tmp.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]));
+    st.nLayers = tp.realLayers;
 
     // ---- which part does every segment belong to
     const multi = artic && artic.parts > 1;
@@ -112,7 +115,8 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
     const len = new Float64Array(nParts);
     for (let s = 0; s < nSeg; s++) {
       const c = segPart[s];
-      const p = c < 0 ? -1 : multi ? artic.compPart[c] ?? 0 : 0;
+      const v = idx[s * 24] * 3;
+      const p = c < 0 || !inCopy(P[v], P[v + 1]) ? -1 : multi ? artic.compPart[c] ?? 0 : 0;
       segP[s] = p;
       if (p >= 0) len[p] += segLen[s];
     }
@@ -229,6 +233,12 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
       ib[b].set(idx.subarray(s * 24, s * 24 + 24), fill[b]);
       fill[b] += 24;
     }
+    // everything that stays on the bed: the skirt and the other copies
+    let nRest = 0;
+    for (let s = 0; s < nSeg; s++) if (segB[s] < 0) nRest++;
+    const rest = new Uint32Array(nRest * 24);
+    for (let s = 0, o = 0; s < nSeg; s++) if (segB[s] < 0) { rest.set(idx.subarray(s * 24, s * 24 + 24), o); o += 24; }
+    st.restIndex = rest;
     bodies.forEach((B, b) => {
       B.geo.setIndex(new THREE.BufferAttribute(ib[b], 1));
       B.geo.boundingSphere = new THREE.Sphere(v3(), 1e4);
@@ -523,7 +533,12 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
     skirtMaterial.metalness = beadMaterial.metalness;
     skirtMaterial.roughness = beadMaterial.roughness;
     skirtMaterial.userData.uniforms.uColorMode.value = U.uColorMode.value;
-    st.skirtMesh = new THREE.Mesh(tp.geometry, skirtMaterial);
+    skirtMaterial.userData.uniforms.uSlots.value = U.uSlots.value;
+    skirtMaterial.userData.uniforms.uSilk.value = U.uSilk.value;
+    const restGeo = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'aDist', 'aType', 'aLayer', 'aSlot']) restGeo.setAttribute(name, tp.geometry.attributes[name]);
+    restGeo.setIndex(new THREE.BufferAttribute(st.restIndex, 1));
+    st.skirtMesh = new THREE.Mesh(restGeo, skirtMaterial);
     st.skirtMesh.frustumCulled = false;
     printer.printSpace.add(st.skirtMesh);
 
@@ -563,7 +578,7 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
   // hard reset (new model / new print)
   function reset() {
     if (st.srcMesh) { st.srcMesh.visible = true; st.srcMesh = null; }
-    if (st.skirtMesh) { st.skirtMesh.removeFromParent(); st.skirtMesh = null; }
+    if (st.skirtMesh) { st.skirtMesh.geometry.dispose(); st.skirtMesh.removeFromParent(); st.skirtMesh = null; }
     if (!st.active && !st.bodies.length) return;
     disposeBodies();
     st.active = false; st.mode = 'off'; st.drag = null; st.grab = null;

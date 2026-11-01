@@ -59,7 +59,7 @@ export function buildToolpath(result, settings) {
 
   for (let li = 0; li < layers.length; li++) {
     const L = layers[li];
-    const z = L.z, h = L.h;
+    const z = L.z, h = L.h, realLayer = L.realLayer ?? li; // By object repeats real layers per copy
     const zc = z - h / 2;
     layerStartMove[li] = mv.count;
     layerStartTime[li] = time;
@@ -76,7 +76,7 @@ export function buildToolpath(result, settings) {
       if (tl > 0.01 || mv.count === layerStartMove[li]) {
         addMove(cx, cy, pts[0], pts[1], z, -1, li, tl / TRAVEL_SPEED + (mv.count === layerStartMove[li] ? 0.35 : 0.02), -1);
       }
-      const speed = li === 0 ? FIRST_LAYER_SPEED : FEATURES[p.type].speed;
+      const speed = realLayer === 0 ? FIRST_LAYER_SPEED : FEATURES[p.type].speed;
       const base = v;
       let pd = dist;
       for (let i = 0; i < n; i++) {
@@ -101,7 +101,7 @@ export function buildToolpath(result, settings) {
         for (const r of ring) {
           position[v * 3] = r[0]; position[v * 3 + 1] = r[1]; position[v * 3 + 2] = r[2];
           normal[v * 3] = r[3]; normal[v * 3 + 1] = r[4]; normal[v * 3 + 2] = r[5];
-          aDist[v] = pd; aType[v] = p.type; aLayer[v] = li; aSlot[v] = slot;
+          aDist[v] = pd; aType[v] = p.type; aLayer[v] = realLayer; aSlot[v] = slot;
           v++;
         }
       }
@@ -139,7 +139,7 @@ export function buildToolpath(result, settings) {
 
   const filamentArea = Math.PI * 0.875 * 0.875;
   return {
-    geometry, segPart, segLen, moves: mv, layers, layerStartMove, layerStartTime,
+    geometry, segPart, segLen, moves: mv, layers, realLayers: layers.reduce((n, L, i) => Math.max(n, (L.realLayer ?? i) + 1), 0), layerStartMove, layerStartTime,
     totalTime: time, totalExtrude: dist, segments: seg, swaps,
     filamentLength: (dist * w * settings.layerHeight) / filamentArea, // mm of 1.75 mm filament
   };

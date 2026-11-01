@@ -28,7 +28,7 @@ const FILAMENTS = [
 
 const settings = {
   layerHeight: 0.2, lineWidth: 0.45, walls: 2, infillDensity: 0.15,
-  topLayers: 4, bottomLayers: 3, skirt: true, skirtDistance: 4,
+  topLayers: 4, bottomLayers: 3, skirt: true, skirtDistance: 4, copies: 1, sequence: 'layer',
 };
 
 const app = {
@@ -237,6 +237,14 @@ $('lh').addEventListener('click', (e) => {
 });
 $('infill').oninput = (e) => { settings.infillDensity = e.target.value / 100; $('infill-out').textContent = e.target.value + '%'; settingsChanged(); };
 $('walls').oninput = (e) => { settings.walls = +e.target.value; $('walls-out').textContent = e.target.value; settingsChanged(); };
+$('sequence').addEventListener('click', (e) => {
+  const v = e.target.dataset.v;
+  if (!v) return;
+  $('sequence').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.target));
+  settings.sequence = v;
+  applyModel();
+});
+$('copies').oninput = (e) => { settings.copies = +e.target.value; applyModel(); };
 $('scale').oninput = (e) => { app.scale = e.target.value / 100; $('scale-out').textContent = e.target.value + '%'; applyModel(); };
 function settingsChanged() {
   if (app.phase !== 'idle') resetToIdle();
@@ -265,16 +273,41 @@ $('start').onclick = () => (app.phase === 'idle' ? startSlicing() : resetToIdle(
 $('again').onclick = () => { resetToIdle(); startSlicing(); };
 $('another').onclick = () => resetToIdle();
 $('inspect-btn').onclick = () => startInspect();
-function startInspect() {
+// Like a real plate: choose one copy and only that one comes off the bed.
+$('viewport').addEventListener('click', (e) => {
+  if (!app.picking) return;
+  const m = app.model, p = new THREE.Vector3();
+  let best = 0, bestD = Infinity;
+  for (let c = 0; c < m.copies; c++) {
+    const x = ((c % m.cols) - (m.cols - 1) / 2) * m.pitch, y = (Math.floor(c / m.cols) - (m.rows - 1) / 2) * m.pitchY;
+    printer.printSpace.localToWorld(p.set(x, y, m.size[2] / 2)).project(S.camera);
+    const d = Math.hypot((p.x + 1) / 2 * innerWidth - e.clientX, (1 - p.y) / 2 * innerHeight - e.clientY);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  app.picking = false;
+  startInspect(best);
+});
+
+function startInspect(copy = app.pendingCopy) {
   if (!app.tp || !beadMesh || app.phase !== 'done') return;
+  const m = app.model;
+  if (m.copies > 1 && copy == null) {
+    app.picking = true;
+    $('done').classList.add('hidden');
+    setCaption('Pick a copy', '<b>Click the copy you want</b> to take it off the bed. The others stay where they are.');
+    return;
+  }
+  app.pendingCopy = copy;
   if (!app.model.artic) { app.inspectPending = true; updateInspectBtn(); return; }
   app.inspectPending = false;
+  app.pendingCopy = null;
   $('done').classList.add('hidden');
   enterPhase('inspect');
   setCam('cinematic');
   const tp = app.tp;
   inspector.start(beadMesh, tp, {
-    grams: (tp.filamentLength * 2.405 * 1.24) / 1000,
+    grams: (tp.filamentLength * 2.405 * 1.24) / 1000 / m.copies,
+    copy, copyAt: m.copies > 1 ? (x, y) => copyAt(m, x, y) : null,
     walls: settings.walls, infill: settings.infillDensity, layerHeight: settings.layerHeight, lineWidth: settings.lineWidth,
   }, app.model.artic);
 }
@@ -373,9 +406,8 @@ function applyModel() {
   if (app.phase !== 'idle') resetToIdle();
   const n = normalizeModel(m.raw, 70);
   for (let i = 0; i < n.positions.length; i++) n.positions[i] *= app.scale;
-  m.positions = n.positions;
+  layoutCopies(m, n.positions, n.size.map((s) => s * app.scale));
   m.artic = null;
-  m.size = n.size.map((s) => s * app.scale);
   m.fitScale = n.scale * app.scale;
   if (ghost) { ghost.geometry.dispose(); printer.printSpace.remove(ghost); }
   const g = new THREE.BufferGeometry();
@@ -387,13 +419,62 @@ function applyModel() {
   updateModelInfo();
 }
 
+// Copies are real extra shells on the bed, so the slicer prints them all in one job, layer by layer.
+const BED_FIT = 205, COPY_GAP = 10;
+// By object: the toolhead must pass finished copies, so they need more room (approximate Bambu clearances)
+const HEAD_CLEARANCE = 40, GANTRY_CLEARANCE = 36;
+function layoutCopies(m, pos, size) {
+  const gap = settings.sequence === 'object' ? HEAD_CLEARANCE : COPY_GAP;
+  const px = size[0] + gap, py = size[1] + gap;
+  const maxCols = Math.max(1, Math.floor((BED_FIT + gap) / px));
+  const maxRows = Math.max(1, Math.floor((BED_FIT + gap) / py));
+  const count = Math.min(settings.copies, maxCols * maxRows);
+  const cols = Math.min(maxCols, Math.ceil(Math.sqrt(count)));
+  const rows = Math.ceil(count / cols);
+  const out = new Float32Array(pos.length * count);
+  for (let c = 0; c < count; c++) {
+    const dx = ((c % cols) - (cols - 1) / 2) * px, dy = (Math.floor(c / cols) - (rows - 1) / 2) * py;
+    const o = c * pos.length;
+    for (let i = 0; i < pos.length; i += 3) {
+      out[o + i] = pos[i] + dx; out[o + i + 1] = pos[i + 1] + dy; out[o + i + 2] = pos[i + 2];
+    }
+  }
+  m.positions = out;
+  m.size = [cols * px - gap, rows * py - gap, size[2]];
+  m.pitchY = py;
+  m.rows = rows;
+  m.copies = count;
+  m.pitch = px;
+  m.cols = cols;
+  $('copies-out').textContent = count < settings.copies ? `${count} (bed full)` : count;
+}
+
+function copyAt(m, x, y) {
+  const clamp = THREE.MathUtils.clamp;
+  const col = clamp(Math.round(x / m.pitch + (m.cols - 1) / 2), 0, m.cols - 1);
+  const row = clamp(Math.round(y / m.pitchY + (m.rows - 1) / 2), 0, m.rows - 1);
+  return Math.min(row * m.cols + col, m.copies - 1);
+}
+
+// By object: finish one copy, then the next. Each copy's layers become a run of their own.
+function sequenceByObject(result, m) {
+  const out = [];
+  for (let c = 0; c < m.copies; c++) {
+    result.layers.forEach((L, li) => {
+      const paths = L.paths.filter((p) => (p.type === 0 ? c === 0 : copyAt(m, p.pts[0], p.pts[1]) === c));
+      if (paths.length) out.push({ ...L, paths, realLayer: li, contours: c ? [] : L.contours });
+    });
+  }
+  result.layers = out;
+}
+
 function updateModelInfo() {
   const m = app.model;
   if (!m) return;
   const [x, y, z] = m.size;
   $('model-info').innerHTML =
     `<b>${escapeHtml(m.name)}</b><br>${x.toFixed(1)} × ${y.toFixed(1)} × ${z.toFixed(1)} mm · ${(m.positions.length / 9).toLocaleString()} triangles<br>` +
-    `≈ ${Math.ceil(z / settings.layerHeight)} layers at ${settings.layerHeight} mm` +
+    (m.copies > 1 ? `${m.copies} copies · ` : '') + `≈ ${Math.ceil(z / settings.layerHeight)} layers at ${settings.layerHeight} mm` +
     (m.artic && m.artic.joints.length ? ` · <b>${m.artic.parts} linked parts</b>` : '') +
     (Math.abs(m.fitScale - 1) > 0.01 ? ` · scaled to ${(m.fitScale * 100).toFixed(0)}%` : '');
 }
@@ -434,6 +515,8 @@ function resetToIdle() {
   if (app.worker) { app.worker.terminate(); app.worker = null; }
   if (app.articWorker) { app.articWorker.terminate(); app.articWorker = null; }
   app.inspectPending = false;
+  app.picking = false;
+  app.pendingCopy = null;
   updateInspectBtn();
   inspector.reset();
   if (beadMesh) { beadMesh.geometry.dispose(); beadMesh.removeFromParent(); beadMesh = null; }
@@ -480,7 +563,8 @@ function startSlicing() {
       onSliced(d.result);
     }
   };
-  const colour = app.colourMode === 'file' ? { triSlots: app.model.colours.tri, slotCount: app.model.colours.palette.length } : {};
+  const repeat = (tri) => { const t = new Uint8Array(tri.length * app.model.copies); for (let c = 0; c < app.model.copies; c++) t.set(tri, c * tri.length); return t; };
+  const colour = app.colourMode === 'file' ? { triSlots: repeat(app.model.colours.tri), slotCount: app.model.colours.palette.length } : {};
   worker.postMessage({ positions: pos, settings: { ...settings, ...colour } }, [pos.buffer]);
 }
 
@@ -489,7 +573,12 @@ function onSliced(result) {
   if (!segs) { toast('Nothing to print — the model may be too thin or not watertight.'); resetToIdle(); return; }
   app.sliceResult = result;
   app.sliceProgress = 1;
+  result.pitch = app.model.pitch;
+  result.cols = app.model.cols;
   if (app.colourMode === 'stripes' || app.colourMode === 'sides') assignSlots(result, app.colourMode);
+  const sequential = settings.sequence === 'object' && app.model.copies > 1;
+  if (sequential) sequenceByObject(result, app.model);
+  if (sequential && app.model.size[2] > GANTRY_CLEARANCE) toast(`Taller than about ${GANTRY_CLEARANCE} mm: on a real printer the gantry could hit finished copies, so Bambu Studio would warn you.`, true);
   const tp = buildToolpath(result, settings);
   app.tp = tp;
   beadMesh = new THREE.Mesh(tp.geometry, beadMaterial);
@@ -575,7 +664,11 @@ function stepPrint(dt) {
   const y = mv.y0[m] + (mv.y1[m] - mv.y0[m]) * f;
   let z = mv.z[m];
   const layer = mv.layer[m];
-  if (mv.type[m] < 0 && tp.layerStartMove[layer] === m && layer > 0) z = mv.z[m - 1] + (z - mv.z[m - 1]) * Math.min(1, f * 3);
+  if (mv.type[m] < 0 && tp.layerStartMove[layer] === m && layer > 0) {
+    // moving to the next copy: stay high until clear of the finished one
+    const k = z < mv.z[m - 1] ? Math.max(0, (f - 0.8) / 0.2) : Math.min(1, f * 3);
+    z = mv.z[m - 1] + (z - mv.z[m - 1]) * k;
+  }
   printer.setHead(x, y);
   printer.setBedZ(z);
   sim.z = z;
@@ -691,7 +784,7 @@ function update(dt) {
   let progress = 0;
 
   if (p === 'idle') {
-    if (ghost) ghost.rotation.z += dt * 0.35;
+    if (ghost && app.model.copies === 1) ghost.rotation.z += dt * 0.35;
     printer.setBedZ(lerp(NOZZLE_Y - printer.bed.position.y, H + 25, 1 - Math.exp(-dt * 2)));
     moveHeadTo(-80, 95, dt);
     app.temps.nozzle = lerp(app.temps.nozzle, 25, dt * 0.4);
@@ -714,7 +807,7 @@ function update(dt) {
     } else scanPlane.position.z = (T * 25) % Math.max(H, 1);
     scanPlane.material.opacity = 0.9;
     progress = app.tp ? 0.5 + revealT * 0.5 : app.sliceProgress * 0.5;
-    const L = app.tp ? app.tp.layers.length : '…';
+    const L = app.tp ? app.tp.realLayers : '…';
     setCaption(
       CAPTIONS.slicing[0],
       CAPTIONS.slicing[1] + `<br><span style="color:#7fdfff">${app.tp ? `Sliced into <b>${L}</b> layers · <b>${app.tp.moves.count.toLocaleString()}</b> moves · ${(app.tp.filamentLength / 1000).toFixed(2)} m of filament` : app.sliceStage + '… ' + Math.round(app.sliceProgress * 100) + '%'}</span>`,
@@ -813,7 +906,8 @@ function showDone() {
   const tp = app.tp;
   const grams = (tp.filamentLength * 2.405 * 1.24) / 1000;
   $('done-stats').innerHTML = [
-    ['Layers', tp.layers.length],
+    ...(app.model.copies > 1 ? [['Copies', app.model.copies]] : []),
+    ['Layers', tp.realLayers],
     ['Real print time', fmtTime(tp.totalTime)],
     ['Filament', `${(tp.filamentLength / 1000).toFixed(2)} m`],
     ['Weight', `${grams.toFixed(1)} g`],
@@ -932,7 +1026,7 @@ function updateHUD(dt) {
   const sim = app.sim;
   if (app.tp && (printing || app.phase === 'cooling' || app.phase === 'done' || app.phase === 'inspect')) {
     const done = app.phase !== 'printing';
-    $('t-layer').textContent = done ? `${app.tp.layers.length}/${app.tp.layers.length}` : `${sim.layer + 1}/${app.tp.layers.length}`;
+    $('t-layer').textContent = done ? `${app.tp.realLayers}/${app.tp.realLayers}` : `${layerNo(sim.layer)}/${app.tp.realLayers}`;
     $('t-z').textContent = `${sim.z.toFixed(2)} mm`;
     $('t-speed').textContent = done ? '0 mm/s' : `${sim.speed} mm/s`;
     const used = done ? app.tp.filamentLength : (app.tp.filamentLength * (app.tp.moves.d0[sim.idx] / app.tp.totalExtrude));
@@ -955,12 +1049,14 @@ function updateHUD(dt) {
   sound.update(printing && !app.paused ? sim.speed : 0, app.fan);
   printer.drawScreen({
     title: app.model ? app.model.name.slice(0, 22) : 'PRINT3D',
-    sub: app.phase === 'printing' ? `Layer ${sim.layer + 1}/${app.tp.layers.length}` : { idle: 'Idle', slicing: 'Slicing…', heating: 'Heating…', leveling: 'Auto-levelling', cooling: 'Cooling', done: 'Finished', inspect: 'Finished' }[app.phase],
+    sub: app.phase === 'printing' ? `Layer ${layerNo(sim.layer)}/${app.tp.realLayers}` : { idle: 'Idle', slicing: 'Slicing…', heating: 'Heating…', leveling: 'Auto-levelling', cooling: 'Cooling', done: 'Finished', inspect: 'Finished' }[app.phase],
     progress: app.phase === 'printing' ? sim.t / app.tp.totalTime : app.phase === 'done' || app.phase === 'cooling' || app.phase === 'inspect' ? 1 : 0,
     nozzle, bed, footer: app.tp ? `ETA ${fmtTime(app.phase === 'printing' ? app.tp.totalTime - sim.t : 0)}` : 'Ready',
   });
   drawMinimap();
 }
+
+const layerNo = (i) => (app.tp.layers[i]?.realLayer ?? i) + 1;
 
 function drawMinimap() {
   const W = mini.width, H = mini.height;
