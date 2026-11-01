@@ -5,6 +5,7 @@ export const NOZZLE_Y = 290; // world height of the nozzle tip
 const GANTRY_Y = NOZZLE_Y + 78;
 const FRAME_TOP = 420;
 const HALF = 170;
+export const CHUTE = { x: -140, y: 140 }; // print coordinates, beside the bed
 
 const mat = {
   chassis: new THREE.MeshStandardMaterial({ color: 0x15181f, roughness: 0.55, metalness: 0.35 }),
@@ -159,21 +160,49 @@ export function createPrinter(scene) {
     marker.rotation.x = -a;
   }
 
+  // AMS: a box of four spools on top of the printer, plus the purge chute and its bin
+  const ams = new THREE.Group();
+  ams.visible = false;
+  root.add(ams);
+  const AMS_Y = FRAME_TOP + 10;
+  shadow(addBox(ams, new RoundedBoxGeometry(310, 16, 120, 2, 4), mat.chassis, 0, AMS_Y + 8, 0));
+  addBox(ams, new RoundedBoxGeometry(310, 84, 120, 2, 6), mat.glass, 0, AMS_Y + 58, 0);
+  const slotX = [-108, -36, 36, 108];
+  const amsSpools = [], amsLeds = [];
+  for (const x of slotX) {
+    const m = new THREE.MeshStandardMaterial({ roughness: 0.35, bumpMap: windTex, bumpScale: 1.5 });
+    const s = shadow(addBox(ams, new THREE.CylinderGeometry(32, 32, 62, 48), m, x, AMS_Y + 52, 0));
+    s.rotation.x = Math.PI / 2;
+    amsSpools.push(s);
+    amsLeds.push(addBox(ams, new THREE.BoxGeometry(30, 4, 2), new THREE.MeshBasicMaterial({ color: 0x20262f, toneMapped: false }), x, AMS_Y + 8, 61));
+  }
+  shadow(addBox(root, new RoundedBoxGeometry(34, 50, 34, 2, 4), mat.head, CHUTE.x, 105, -CHUTE.y));
+  const blob = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial({ roughness: 0.5 }));
+  blob.visible = false;
+  root.add(blob);
+
   // PTFE tube + filament inside (rebuilt as the head moves)
   const ptfe = new THREE.Mesh(new THREE.BufferGeometry(), mat.ptfe);
   const filamentCore = new THREE.Mesh(new THREE.BufferGeometry(), filamentMat);
   root.add(ptfe, filamentCore);
 
-  const state = { x: 0, y: 0, bedZ: 0, fanSpeed: 0, fanAngle: 0, spoolAngle: 0, temp: 25 };
+  const state = { x: 0, y: 0, bedZ: 0, fanSpeed: 0, fanAngle: 0, spoolAngle: 0, temp: 25, slot: 0, fill: 1 };
   const tmp = new THREE.Vector3();
 
   function updateTube() {
     const hx = head.position.x, hz = head.position.z;
     const inlet = new THREE.Vector3(hx, NOZZLE_Y + 95, hz - 4);
+    const sx = slotX[state.slot];
     const curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(spoolPos.x, spoolPos.y + 78, spoolPos.z - 10),
-      new THREE.Vector3(spoolPos.x - 10, FRAME_TOP + 40, spoolPos.z - 40),
-      new THREE.Vector3((hx + HALF) * 0.5, FRAME_TOP + 70, (hz - 120) * 0.5),
+      ...(ams.visible ? [
+        new THREE.Vector3(sx, AMS_Y + 20, -64),
+        new THREE.Vector3(sx * 0.7, AMS_Y + 30, -100),
+        new THREE.Vector3(hx * 0.5, AMS_Y + 10, (hz - 120) * 0.5),
+      ] : [
+        new THREE.Vector3(spoolPos.x, spoolPos.y + 78, spoolPos.z - 10),
+        new THREE.Vector3(spoolPos.x - 10, FRAME_TOP + 40, spoolPos.z - 40),
+        new THREE.Vector3((hx + HALF) * 0.5, FRAME_TOP + 70, (hz - 120) * 0.5),
+      ]),
       tmp.set(hx, NOZZLE_Y + 150, hz - 4).clone(),
       inlet,
     ]);
@@ -181,10 +210,11 @@ export function createPrinter(scene) {
     filamentCore.geometry.dispose();
     ptfe.geometry = new THREE.TubeGeometry(curve, 70, 2.6, 10, false);
     filamentCore.geometry = new THREE.TubeGeometry(curve, 70, 0.9, 6, false);
+    filamentCore.geometry.setDrawRange(0, Math.round(state.fill * 70) * 36);
   }
 
   const printer = {
-    root, bed, printSpace, head, gantry, spool, filamentMat, chamberLight,
+    root, ams, bed, printSpace, head, gantry, spool, filamentMat, chamberLight,
     setHead(x, y) {
       state.x = x; state.y = y;
       head.position.set(x, NOZZLE_Y, -y);
@@ -211,6 +241,26 @@ export function createPrinter(scene) {
     feedFilament(mm) {
       state.spoolAngle += mm / 70;
       spool.rotation.x = -state.spoolAngle;
+      amsSpools[state.slot].rotation.y = -state.spoolAngle * 2;
+    },
+    setAms(on) {
+      ams.visible = on;
+      spool.visible = spoolHolder.visible = !on;
+    },
+    setSlotColor(i, color) { amsSpools[i].material.color.set(color); },
+    // fill: how far the filament reaches along the tube, 0 = AMS, 1 = hotend
+    setLoaded(slot, fill = 1) {
+      state.slot = slot;
+      state.fill = fill;
+      amsLeds.forEach((l, i) => l.material.color.set(i === slot ? 0x00ffa3 : 0x20262f));
+    },
+    // the purge blob hangs under the nozzle, then falls into the chute (drop 0..1)
+    setBlob(size, color, drop = 0) {
+      blob.visible = size > 0;
+      if (!blob.visible) return;
+      blob.scale.setScalar(size);
+      blob.material.color.copy(color);
+      blob.position.set(CHUTE.x, NOZZLE_Y - size - drop * (NOZZLE_Y - size - 130), -CHUTE.y);
     },
     tick(dt) {
       state.fanAngle += dt * state.fanSpeed * 40;

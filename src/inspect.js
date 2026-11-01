@@ -217,7 +217,7 @@ export function createInspector({ S, printer, beadMaterial, sound, onCaption, on
 
       // render the printed beads of this body, sharing the toolpath buffers
       const g = new THREE.BufferGeometry();
-      for (const name of ['position', 'normal', 'aDist', 'aType', 'aLayer']) g.setAttribute(name, geo.attributes[name]);
+      for (const name of ['position', 'normal', 'aDist', 'aType', 'aLayer', 'aSlot']) g.setAttribute(name, geo.attributes[name]);
       B.geo = g;
     }
     // per body index buffers

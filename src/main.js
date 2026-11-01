@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { createScene } from './scene.js';
-import { createPrinter, NOZZLE_Y } from './printer.js';
+import { createPrinter, NOZZLE_Y, CHUTE } from './printer.js';
 import { DEMO_MODELS } from './models.js';
 import { loadModelFile, normalizeModel } from './loaders.js';
 import { buildToolpath, createBeadMaterial, FEATURES, TRAVEL_SPEED } from './toolpath.js';
 import { createSound } from './sound.js';
+import { assignSlots, SLOT_NAMES, SWAP_STAGES, SWAP_TIME, PURGE_MM3 } from './ams.js';
 import { createInspector } from './inspect.js';
 
 const $ = (id) => document.getElementById(id);
@@ -39,6 +40,8 @@ const app = {
   worker: null, sliceProgress: 0, sliceStage: '',
   levelOffsets: Array.from({ length: 9 }, () => (Math.random() - 0.5) * 0.12),
   captionLock: 0,
+  colourMode: 'single', activeSlot: 0, loaded: 0, swapWatched: false,
+  slots: [FILAMENTS[0], FILAMENTS[2], FILAMENTS[4], FILAMENTS[3]],
 };
 
 // ---------------------------------------------------------------- materials & scene objects
@@ -142,8 +145,6 @@ FILAMENTS.forEach((f, i) => {
   b.style.color = f.color;
   b.title = f.name;
   b.onclick = () => {
-    swatches.querySelectorAll('.swatch').forEach((s) => s.classList.remove('on'));
-    b.classList.add('on');
     setFilament(f);
   };
   swatches.appendChild(b);
@@ -160,15 +161,70 @@ FEATURES.forEach((f, i) => {
   legend.appendChild(d);
 });
 
-function setFilament(f) {
-  beadMaterial.color.set(f.color);
-  beadMaterial.metalness = f.silk ? 0.55 : 0;
-  beadMaterial.roughness = f.silk ? 0.25 : 0.5;
+function setFilament(f, i = app.activeSlot) {
+  app.slots[i] = f;
+  const U = beadMaterial.userData.uniforms;
+  U.uSlots.value[i].set(f.color);
+  U.uSilk.value[i] = f.silk ? 1 : 0;
+  printer.setSlotColor(i, f.color);
+  if (i === 0) {
+    beadMaterial.color.set(f.color);
+    beadMaterial.metalness = f.silk ? 0.55 : 0;
+    beadMaterial.roughness = f.silk ? 0.25 : 0.5;
+  }
+  if (i === app.loaded) showLoaded(i);
+  renderSlots();
+}
+
+// the filament currently in the tube and hotend
+function showLoaded(slot, fill) {
+  const f = app.slots[slot];
+  app.loaded = slot;
+  printer.setLoaded(slot, fill);
   printer.setFilamentColor(f.color, f.silk);
   document.documentElement.style.setProperty('--fil', f.color);
-  swName.textContent = f.name + (f.silk ? ' · silk PLA' : ' · PLA');
 }
-setFilament(FILAMENTS[0]);
+
+function renderSlots() {
+  const chip = (i, on) => `<button class="ams-slot${on ? ' on' : ''}" data-s="${i}" style="background:${app.slots[i].color}">${SLOT_NAMES[i]}</button>`;
+  const used = { stripes: 4, file: app.model?.colours?.palette.length }[app.colourMode] ?? 2;
+  $('ams-slots').innerHTML = app.slots.slice(0, used).map((_, i) => chip(i, i === app.activeSlot)).join('');
+  $('ams-live').innerHTML = app.slots.slice(0, used).map((_, i) => chip(i, i === app.loaded)).join('');
+  const f = app.slots[app.activeSlot];
+  swatches.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('on', s.title === f.name));
+  swName.textContent = (app.colourMode === 'single' ? '' : `Slot ${SLOT_NAMES[app.activeSlot]} · `) + f.name + (f.silk ? ' · silk PLA' : ' · PLA');
+}
+app.slots.forEach((f, i) => setFilament(f, i));
+
+$('ams-slots').addEventListener('click', (e) => {
+  if (!e.target.dataset.s) return;
+  app.activeSlot = +e.target.dataset.s;
+  renderSlots();
+});
+$('colour-mode').addEventListener('click', (e) => {
+  if (e.target.dataset.m) setColourMode(e.target.dataset.m);
+});
+function setColourMode(mode) {
+  $('colour-mode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
+  app.colourMode = mode;
+  app.activeSlot = 0;
+  const multi = mode !== 'single';
+  $('ams-slots').classList.toggle('hidden', !multi);
+  $('ams-status').classList.toggle('hidden', !multi);
+  printer.setAms(multi);
+  renderSlots();
+  settingsChanged();
+}
+
+// a 3MF with colours loads them into the AMS by itself
+function applyFileColours() {
+  const c = app.model.colours;
+  $('colour-mode').querySelector('[data-m=file]').classList.toggle('hidden', !c);
+  if (c) c.palette.forEach((color, i) => setFilament({ name: `From file ${i + 1}`, color }, i));
+  if (c) setColourMode('file');
+  else if (app.colourMode === 'file') setColourMode('single');
+  if (c?.merged) toast(`This model has ${c.palette.length + c.merged} colours, but an AMS has 4 slots. Similar colours were merged.`, true);
+}
 
 // settings
 $('lh').addEventListener('click', (e) => {
@@ -289,7 +345,7 @@ async function loadFile(file) {
   try {
     toast(`Loading ${file.name}…`, true);
     const raw = await loadModelFile(file);
-    setModel({ name: file.name.replace(/\.[^.]+$/, ''), raw, source: 'upload' });
+    setModel({ name: file.name.replace(/\.[^.]+$/, ''), raw, colours: raw.colours, source: 'upload' });
     demoGrid.querySelectorAll('.demo').forEach((b) => b.classList.remove('on'));
     toast(`Loaded “${file.name}” — ${(raw.length / 9).toLocaleString()} triangles`, true);
   } catch (err) {
@@ -308,6 +364,7 @@ function setModel(model) {
   resetToIdle();
   app.model = model;
   applyModel();
+  applyFileColours();
 }
 
 function applyModel() {
@@ -385,6 +442,10 @@ function resetToIdle() {
   app.sliceResult = null;
   activeBead.visible = false;
   scanPlane.visible = false;
+  app.swapWatched = false;
+  showLoaded(0);
+  printer.setBlob(0);
+  renderSlots();
   $('done').classList.add('hidden');
   $('gcode').innerHTML = '';
   gcodeLines.length = 0;
@@ -419,7 +480,8 @@ function startSlicing() {
       onSliced(d.result);
     }
   };
-  worker.postMessage({ positions: pos, settings: { ...settings } }, [pos.buffer]);
+  const colour = app.colourMode === 'file' ? { triSlots: app.model.colours.tri, slotCount: app.model.colours.palette.length } : {};
+  worker.postMessage({ positions: pos, settings: { ...settings, ...colour } }, [pos.buffer]);
 }
 
 function onSliced(result) {
@@ -427,6 +489,7 @@ function onSliced(result) {
   if (!segs) { toast('Nothing to print — the model may be too thin or not watertight.'); resetToIdle(); return; }
   app.sliceResult = result;
   app.sliceProgress = 1;
+  if (app.colourMode === 'stripes' || app.colourMode === 'sides') assignSlots(result, app.colourMode);
   const tp = buildToolpath(result, settings);
   app.tp = tp;
   beadMesh = new THREE.Mesh(tp.geometry, beadMaterial);
@@ -494,7 +557,7 @@ function seek(t) {
 
 function stepPrint(dt) {
   const tp = app.tp, mv = tp.moves, sim = app.sim;
-  sim.t += dt * sim.mult;
+  sim.t += dt * (mv.swap[sim.idx] ? swapRate(sim.idx) : sim.mult);
   const startIdx = sim.idx;
   while (sim.idx < mv.count - 1 && mv.t0[sim.idx] + mv.dur[sim.idx] <= sim.t) {
     const m = sim.idx;
@@ -504,6 +567,7 @@ function stepPrint(dt) {
       printer.feedFilament((len * settings.lineWidth * settings.layerHeight) / 2.405);
     }
     sim.idx++;
+    if (mv.swap[sim.idx] && swapWatchTime(sim.idx)) { sim.t = Math.min(sim.t, mv.t0[sim.idx]); break; }
   }
   const m = sim.idx;
   const f = THREE.MathUtils.clamp((sim.t - mv.t0[m]) / mv.dur[m], 0, 1);
@@ -515,6 +579,8 @@ function stepPrint(dt) {
   printer.setHead(x, y);
   printer.setBedZ(z);
   sim.z = z;
+  if (mv.swap[m]) stepSwap(m, f);
+  else if (app.swapWatched || app.loaded !== mv.slot[m] || tpFill) endSwap(mv.slot[m]);
 
   const extruding = mv.geo[m] >= 0;
   const segLen = Math.hypot(mv.x1[m] - mv.x0[m], mv.y1[m] - mv.y0[m]);
@@ -541,6 +607,7 @@ function stepPrint(dt) {
     if (tp.layerStartMove[mv.layer[k]] === k) {
       gcodeLines.push(`<span class="l">;LAYER_CHANGE</span>`, `<span class="c">;Z:${mv.z[k].toFixed(2)}</span>`, `G1 Z${mv.z[k].toFixed(2)} F720`);
     }
+    if (mv.swap[k]) gcodeLines.push(`<span class="l">;FILAMENT_SWAP</span>`, `T${mv.slot[k]} <span class="c">; load slot ${SLOT_NAMES[mv.slot[k]]}</span>`);
     if (mv.geo[k] >= 0 && mv.type[k] !== lastType) {
       lastType = mv.type[k];
       gcodeLines.push(`<span class="c">;TYPE:${FEATURES[lastType].name}</span>`);
@@ -550,6 +617,49 @@ function stepPrint(dt) {
   if (gcodeLines.length > 40) gcodeLines.splice(0, gcodeLines.length - 40);
 
   if (sim.idx >= mv.count - 1 && f >= 1) finishPrint();
+}
+
+// Wall-clock seconds to show a swap: the first ones slowly, then quicker. With many swaps
+// the rest pass at print speed, so the viewer feels how much time they add.
+function swapWatchTime(m) {
+  const n = app.tp.moves.swap[m];
+  return n <= 2 ? 10 : app.tp.swaps <= 12 ? 3.5 : 0;
+}
+
+function swapRate(m) {
+  const watch = swapWatchTime(m);
+  return watch ? Math.min(app.sim.mult, SWAP_TIME / watch) : app.sim.mult;
+}
+
+let tpFill = false;
+const blobColor = new THREE.Color(), blobTo = new THREE.Color();
+function stepSwap(m, f) {
+  const mv = app.tp.moves, from = mv.slot[m - 1], to = mv.slot[m];
+  const stage = SWAP_STAGES.findIndex((s) => f <= s.to);
+  const a = stage ? SWAP_STAGES[stage - 1].to : 0;
+  const q = (f - a) / (SWAP_STAGES[stage].to - a);
+  const out = ease(Math.min(f / 0.12, 1)), back = ease(Math.max((f - 0.9) / 0.1, 0));
+  printer.setHead(lerp(lerp(mv.x0[m], CHUTE.x, out), mv.x1[m], back), lerp(lerp(mv.y0[m], CHUTE.y, out), mv.y1[m], back));
+  tpFill = true;
+  if (stage === 0) showLoaded(from, 1);
+  else if (stage === 1) showLoaded(from, 1 - q);
+  else showLoaded(to, stage === 2 ? q : 1);
+  blobColor.set(app.slots[from].color).lerp(blobTo.set(app.slots[to].color), stage === 3 ? q : 1);
+  printer.setBlob(stage === 3 ? 2 + q * 7 : stage === 4 ? 9 : 0, blobColor, stage === 4 ? q * q : 0);
+  activeBead.visible = false;
+  app.swapWatched = swapWatchTime(m) > 0;
+  if (app.swapWatched) {
+    setCaption(`Filament swap ${mv.swap[m]}/${app.tp.swaps} · ${SLOT_NAMES[from]} → ${SLOT_NAMES[to]} · ${SWAP_STAGES[stage].title}`, SWAP_STAGES[stage].text);
+    app.captionLock = app.time + 0.5;
+  }
+}
+
+function endSwap(slot) {
+  tpFill = false;
+  app.swapWatched = false;
+  printer.setBlob(0);
+  showLoaded(slot);
+  renderSlots();
 }
 
 function gcodeFor(k) {
@@ -709,6 +819,11 @@ function showDone() {
     ['Weight', `${grams.toFixed(1)} g`],
     ['Nozzle moves', tp.moves.count.toLocaleString()],
     ['Extruded path', `${(tp.totalExtrude / 1000).toFixed(1)} m`],
+    ...(tp.swaps ? [
+      ['Filament swaps', tp.swaps],
+      ['Time on swaps', fmtTime(tp.swaps * SWAP_TIME)],
+      ['Plastic purged', `${((tp.swaps * PURGE_MM3 * 1.24) / 1000).toFixed(1)} g`],
+    ] : []),
   ].map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join('');
   $('done').classList.remove('hidden');
 }
@@ -757,7 +872,11 @@ function updateCamera(dt) {
       case 'printing': {
         const z = app.sim.z;
         const shot = Math.floor(t / 10) % 3;
-        if (shot === 0) {
+        if (app.swapWatched) {
+          // wide shot: AMS on top, purge chute at the back left
+          camTarget.set(-30, 300, -50);
+          camPos.set(-260, 480, 620);
+        } else if (shot === 0) {
           // low tracking shot just under the toolhead
           const a = 0.55 + Math.sin(t * 0.09) * 0.3;
           const R = 170 + H * 0.9;
@@ -824,6 +943,12 @@ function updateHUD(dt) {
     for (const id of ['t-layer', 't-z', 't-eta']) $(id).textContent = '—';
     $('t-speed').textContent = '0 mm/s';
     $('t-fil').textContent = '0.00 m';
+  }
+  if (app.tp && printing) {
+    const mv = app.tp.moves;
+    let done = mv.swap[sim.idx];
+    if (!done) { let k = sim.idx; while (k > 0 && !mv.swap[k]) k--; done = mv.swap[k]; }
+    $('ams-swaps').textContent = `${done}/${app.tp.swaps} swaps`;
   }
   legend.querySelectorAll('div').forEach((d) => d.classList.toggle('on', printing && +d.dataset.i === sim.type));
   $('gcode').innerHTML = gcodeLines.slice(-12).join('\n');

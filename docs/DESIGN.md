@@ -64,6 +64,17 @@ These models drove the design. They are not in the repo, so download them from M
 - **Articulated sloth** (print-in-place): 13 parts and 12 joints, mostly hinges with pins in sockets. Analysis takes about 4.5 s.
 - **[Slippery / twisty egg fidget](https://makerworld.com/en/models/2443178-slippery-egg-fidget)**: 15 slats in a ring, linked by dovetails that twist with height. That makes 15 coaxial **screw** joints (pitch ≈ 81 mm/rad at 70 mm). This model is why screw/slide joints exist. Analysis dropped from 46 s to 6 s.
 
+## Multi-colour (`ams.js`)
+
+- The goal is teaching: one nozzle, one colour at a time, and every swap costs time and plastic. "One colour" stays the default and keeps the side spool. The AMS box and purge chute appear only in multi-colour modes.
+- `assignSlots()` runs after slicing and only tags and splits paths, so the slicer worker stays colour-agnostic and part numbering is untouched. It reorders each layer to start with the loaded colour, like a real slicer.
+- A swap is a normal entry in the move timeline (`mv.swap` is its 1-based number, `mv.slot` the colour of every move). Scrubbing therefore needs no extra state, and the stage comes from progress through that move.
+- The first swaps play slowly so they can be followed. With more than 12 swaps the rest run at print speed.
+- Bead colours come from `aSlot` and the `uSlots`/`uSilk` uniforms, so changing a slot recolours the bead live.
+- 3MF colours come from `basematerials`/`colorgroup`, Bambu per-part filaments or painting. The loader gives each triangle a slot (`colours.tri`, in the same order as the positions), and `meshPattern()` colours each path point from the nearest surface in that layer, in the slicer worker.
+- Painted triangles are simplified: a subdivided triangle takes its dominant filament, so very fine painting looks coarser. More than 4 colours are merged into the closest slot.
+- Not modelled yet: the prime tower.
+
 ## Checking changes
 
 There is no automated test suite yet. Before you push, check by hand with `npm run dev`:

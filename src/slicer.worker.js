@@ -2,6 +2,7 @@
 // Input mesh is in print coordinates (mm, Z-up, min z = 0).
 import ClipperLib from 'clipper-lib';
 import { findComponents } from './articulate.js';
+import { assignSlots, meshPattern } from './ams.js';
 
 const C = ClipperLib;
 const SCALE = 1000; // clipper works on integers -> micrometres
@@ -12,6 +13,7 @@ self.onmessage = (e) => {
   const { positions, settings } = e.data;
   try {
     const result = slice(positions, settings);
+    if (settings.triSlots) assignSlots(result, meshPattern(positions, settings.triSlots, settings.slotCount));
     const transfer = [];
     for (const l of result.layers) {
       for (const p of l.paths) transfer.push(p.pts.buffer);
